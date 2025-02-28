@@ -1,0 +1,23 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+	<ItemGroup>
+		<PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
+		<PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.3.0" />
+		<PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="9.0.2" />
+		<PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.4.0" />
+	</ItemGroup>
+	<ItemGroup>
+	  <Folder Include="Repositories\Catalog\" />
+	</ItemGroup>
+	<ItemGroup>
+	  <ProjectReference Include="..\GenesisFEPortalWeb.Database\GenesisFEPortalWeb.Database.csproj" />
+	  <ProjectReference Include="..\GenesisFEPortalWeb.Models\GenesisFEPortalWeb.Models.csproj" />
+	  <ProjectReference Include="..\GenesisFEPortalWeb.Utilities\GenesisFEPortalWeb.Utilities.csproj" />
+	</ItemGroup>
+
+</Project>

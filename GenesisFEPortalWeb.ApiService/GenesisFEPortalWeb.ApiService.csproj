@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GenesisFEPortalWeb.BL\GenesisFEPortalWeb.BL.csproj" />
+    <ProjectReference Include="..\GenesisFEPortalWeb.ServiceDefaults\GenesisFEPortalWeb.ServiceDefaults.csproj" />
+  </ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.2" />
+		<PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.0" />
+		<PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.2" />
+		<PackageReference Include="Swashbuckle.AspNetCore.SwaggerGen" Version="7.2.0" />
+		<PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="7.2.0" />
+	</ItemGroup>
+
+</Project>
