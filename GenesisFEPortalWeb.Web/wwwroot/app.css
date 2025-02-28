@@ -54,3 +54,9 @@ h1:focus {
 .form-floating > .form-control-plaintext:focus::placeholder, .form-floating > .form-control:focus::placeholder {
     text-align: start;
 }
+
+
+
+.page-background {
+    background-image: url(resources/imgs/bg-login.jpg);
+}

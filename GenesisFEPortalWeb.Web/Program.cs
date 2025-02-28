@@ -10,8 +10,6 @@ var builder = WebApplication.CreateBuilder(args);
 // Add service defaults & Aspire client integrations.
 builder.AddServiceDefaults();
 
-// Add service defaults & Aspire client integrations.
-builder.AddServiceDefaults();
 builder.Services.AddScoped<DialogService>();
 
 // Add services to the container.
@@ -38,9 +36,6 @@ builder.Services.AddAuthentication(options =>
     options.LogoutPath = "/logout";
 });
 
-// Add services to the container.
-builder.Services.AddRazorComponents()
-    .AddInteractiveServerComponents();
 
 builder.Services.AddRadzenComponents(); // Library for radzen
 builder.Services.AddBlazoredToast(); // Library for toast notifications -> Change to your preferred library.
@@ -63,6 +58,7 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
+
 app.UseStaticFiles();
 
 app.UseHttpsRedirection();
@@ -71,6 +67,7 @@ app.UseAntiforgery();
 
 app.UseAuthentication();
 app.UseAuthorization();
+
 
 app.UseOutputCache();
 
