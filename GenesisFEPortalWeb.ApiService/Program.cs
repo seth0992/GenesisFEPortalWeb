@@ -4,6 +4,7 @@ using GenesisFEPortalWeb.BL.Repositories.Core;
 using GenesisFEPortalWeb.BL.Services.Audit;
 using GenesisFEPortalWeb.BL.Services.Auth;
 using GenesisFEPortalWeb.BL.Services.Core;
+using GenesisFEPortalWeb.BL.Services.Notifications;
 using GenesisFEPortalWeb.Database.Data;
 using GenesisFEPortalWeb.Models.Entities.Tenant;
 using GenesisFEPortalWeb.Utilities;
@@ -12,6 +13,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Resend;
 using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -81,6 +83,15 @@ builder.Services.AddDbContextFactory<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 builder.Services.AddHttpContextAccessor();
+
+//Resend
+builder.Services.Configure<ResendClientOptions>(o =>
+{
+    o.ApiToken = Environment.GetEnvironmentVariable("re_A8z1ChH2_Q36aprhNpG1a6WN5PPBt36m8")!;
+});
+builder.Services.AddTransient<IResend, ResendClient>();
+// Registrar el servicio de correo
+builder.Services.AddScoped<IEmailService, ResendEmailService>();
 
 #region servicios para autenticación
 // Authentication services

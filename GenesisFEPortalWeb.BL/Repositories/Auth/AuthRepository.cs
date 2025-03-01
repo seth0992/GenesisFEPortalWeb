@@ -29,6 +29,13 @@ namespace GenesisFEPortalWeb.BL.Repositories.Auth
         Task<int> GetAccessFailedCountAsync(long userId);
         Task RevokeAllActiveRefreshTokensAsync(long userId);
         Task SaveChangesAsync();
+        Task UpdateUserPasswordAsync(long userId, string passwordHash);  
+        Task GeneratePasswordResetTokenAsync(long userId, string token, DateTime expiryDate);  
+        Task<bool> ValidatePasswordResetTokenAsync(string email, string token);  
+        Task<UserModel?> GetUserByPasswordResetTokenAsync(string token); 
+        Task InvalidatePasswordResetTokenAsync(long userId);
+        Task<UserModel?> GetUserByIdAsync(long userId);
+
     }
 
 
@@ -41,19 +48,19 @@ namespace GenesisFEPortalWeb.BL.Repositories.Auth
             _context = context;
         }
 
-        public async Task<UserModel?> GetUserByEmailAsync(string email, bool includeRelations = true)
-        {
-            var query = _context.Users.AsQueryable();
+        //public async Task<UserModel?> GetUserByEmailAsync(string email, bool includeRelations = true)
+        //{
+        //    var query = _context.Users.AsQueryable();
 
-            if (includeRelations)
-            {
-                query = query
-                    .Include(u => u.Role)
-                    .Include(u => u.Tenant);
-            }
+        //    if (includeRelations)
+        //    {
+        //        query = query
+        //            .Include(u => u.Role)
+        //            .Include(u => u.Tenant);
+        //    }
 
-            return await query.FirstOrDefaultAsync(u => u.Email == email);
-        }
+        //    return await query.FirstOrDefaultAsync(u => u.Email == email);
+        //}
 
         public async Task<RoleModel?> GetRoleByNameAsync(string roleName)
         {
@@ -176,6 +183,102 @@ namespace GenesisFEPortalWeb.BL.Repositories.Auth
         public async Task SaveChangesAsync()
         {
             await _context.SaveChangesAsync();
+        }
+
+        public async Task UpdateUserPasswordAsync(long userId, string passwordHash)
+        {
+            var user = await _context.Users.FindAsync(userId);
+            if (user != null)
+            {
+                user.PasswordHash = passwordHash;
+                user.LastPasswordChangeDate = DateTime.UtcNow;
+                user.SecurityStamp = Guid.NewGuid().ToString();
+                user.UpdatedAt = DateTime.UtcNow;
+
+                await SaveChangesAsync();
+            }
+        }
+
+        public async Task GeneratePasswordResetTokenAsync(long userId, string token, DateTime expiryDate)
+        {
+            // Primero invalidar cualquier token existente
+            await InvalidatePasswordResetTokenAsync(userId);
+
+            // Crear una nueva entidad para el token de restablecimiento
+            var resetToken = new PasswordResetTokenModel
+            {
+                UserId = userId,
+                Token = token,
+                ExpiryDate = expiryDate,
+                IsUsed = false,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            await _context.PasswordResetTokens.AddAsync(resetToken);
+            await SaveChangesAsync();
+        }
+
+        public async Task<bool> ValidatePasswordResetTokenAsync(string email, string token)
+        {
+            var user = await GetUserByEmailAsync(email, false);
+            if (user == null) return false;
+
+            var resetToken = await _context.PasswordResetTokens
+                .Where(rt => rt.UserId == user.ID &&
+                             rt.Token == token &&
+                             !rt.IsUsed &&
+                             rt.ExpiryDate > DateTime.UtcNow)
+                .FirstOrDefaultAsync();
+
+            return resetToken != null;
+        }
+        public async Task<UserModel?> GetUserByEmailAsync(string email, bool includeRelations = true)
+        {
+            var query = _context.Users.AsQueryable();
+
+            if (includeRelations)
+            {
+                query = query
+                    .Include(u => u.Role)
+                    .Include(u => u.Tenant);
+            }
+
+            return await query.FirstOrDefaultAsync(u => u.Email == email);
+        }
+
+        public async Task<UserModel?> GetUserByIdAsync(long userId)
+        {
+            return await _context.Users
+                .Include(u => u.Role)
+                .Include(u => u.Tenant)
+                .FirstOrDefaultAsync(u => u.ID == userId);
+        }
+
+        public async Task<UserModel?> GetUserByPasswordResetTokenAsync(string token)
+        {
+            var resetToken = await _context.PasswordResetTokens
+                .Where(rt => rt.Token == token &&
+                             !rt.IsUsed &&
+                             rt.ExpiryDate > DateTime.UtcNow)
+                .FirstOrDefaultAsync();
+
+            if (resetToken == null) return null;
+
+            return await GetUserByIdAsync(resetToken.UserId);
+        }
+
+        public async Task InvalidatePasswordResetTokenAsync(long userId)
+        {
+            var existingTokens = await _context.PasswordResetTokens
+                .Where(rt => rt.UserId == userId && !rt.IsUsed)
+                .ToListAsync();
+
+            foreach (var token in existingTokens)
+            {
+                token.IsUsed = true;
+            }
+
+            await SaveChangesAsync();
         }
     }
 }

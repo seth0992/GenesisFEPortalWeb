@@ -9,17 +9,59 @@ using GenesisFEPortalWeb.Web.Authentication;
 
 namespace GenesisFEPortalWeb.Web;
 
-public class ApiClient(HttpClient httpClient,
-    ProtectedLocalStorage localStorage,
-    NavigationManager navigationManager,
-    AuthenticationStateProvider authStateProvider)
+public class ApiClient
 {
+    private readonly HttpClient _httpClient;
+    private readonly ProtectedLocalStorage _localStorage;
+    private readonly NavigationManager _navigationManager;
+    private readonly AuthenticationStateProvider _authStateProvider;
+    private readonly ILogger<ApiClient> _logger;
+    private bool _isRefreshing = false;
+    private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
 
+    public ApiClient(
+        HttpClient httpClient,
+        ProtectedLocalStorage localStorage,
+        NavigationManager navigationManager,
+        AuthenticationStateProvider authStateProvider,
+        ILogger<ApiClient> logger)
+    {
+        _httpClient = httpClient;
+        _localStorage = localStorage;
+        _navigationManager = navigationManager;
+        _authStateProvider = authStateProvider;
+        _logger = logger;
+    }
+
+    //public async Task SetAuthorizationHeader()
+    //{
+    //    try
+    //    {
+    //        var sessionResult = await _localStorage.GetAsync<LoginResponseModel>("sessionState");
+    //        var session = sessionResult.Success ? sessionResult.Value : null;
+
+    //        if (session == null || string.IsNullOrEmpty(session.Token))
+    //        {
+    //            throw new Exception("No session found");
+    //        }
+
+    //        // Agregar el token a los headers
+    //        _httpClient.DefaultRequestHeaders.Authorization =
+    //            new AuthenticationHeaderValue("Bearer", session.Token);
+    //    }
+    //    catch (Exception)
+    //    {
+    //        await ((CustomAuthStateProvider)_authStateProvider).MarkUserAsLoggedOut();
+    //        _navigationManager.NavigateTo("/login");
+    //    }
+    //}
     public async Task SetAuthorizationHeader()
     {
         try
         {
-            var sessionResult = await localStorage.GetAsync<LoginResponseModel>("sessionState");
+            await _semaphore.WaitAsync();
+
+            var sessionResult = await _localStorage.GetAsync<LoginResponseModel>("sessionState");
             var session = sessionResult.Success ? sessionResult.Value : null;
 
             if (session == null || string.IsNullOrEmpty(session.Token))
@@ -27,33 +69,121 @@ public class ApiClient(HttpClient httpClient,
                 throw new Exception("No session found");
             }
 
+            // Verificar si el token está por expirar (menos de 5 minutos de vida)
+            var isTokenExpiring = session.TokenExpired - DateTimeOffset.UtcNow.ToUnixTimeSeconds() < 300;
+
+            // Si el token está por expirar, intentar refrescarlo
+            if (isTokenExpiring && !_isRefreshing)
+            {
+                _isRefreshing = true;
+                var refreshed = await RefreshTokenAsync(session.Token, session.RefreshToken);
+                _isRefreshing = false;
+
+                if (!refreshed)
+                {
+                    await ((CustomAuthStateProvider)_authStateProvider).MarkUserAsLoggedOut();
+                    _navigationManager.NavigateTo("/login");
+                    return;
+                }
+
+                // Obtenemos el nuevo token de la sesión actualizada
+                sessionResult = await _localStorage.GetAsync<LoginResponseModel>("sessionState");
+                session = sessionResult.Success ? sessionResult.Value : null;
+
+                if (session == null || string.IsNullOrEmpty(session.Token))
+                {
+                    throw new Exception("Session refresh failed");
+                }
+            }
+
             // Agregar el token a los headers
-            httpClient.DefaultRequestHeaders.Authorization =
+            _httpClient.DefaultRequestHeaders.Authorization =
                 new AuthenticationHeaderValue("Bearer", session.Token);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            await ((CustomAuthStateProvider)authStateProvider).MarkUserAsLoggedOut();
-            navigationManager.NavigateTo("/login");
+            _logger.LogError(ex, "Error setting authorization header");
+            await ((CustomAuthStateProvider)_authStateProvider).MarkUserAsLoggedOut();
+            _navigationManager.NavigateTo("/login");
+        }
+        finally
+        {
+            _semaphore.Release();
         }
     }
 
-    private async Task<LoginResponseModel?> RefreshToken(string refreshToken)
+    private async Task<bool> RefreshTokenAsync(string token, string refreshToken)
     {
-        return await httpClient.GetFromJsonAsync<LoginResponseModel>(
-            $"/api/auth/refreshToken?token={refreshToken}");
+        try
+        {
+            // Eliminar el token actual del header para evitar bucles
+            _httpClient.DefaultRequestHeaders.Authorization = null;
+
+            var refreshRequest = new RefreshTokenRequest
+            {
+                Token = token,
+                RefreshToken = refreshToken
+            };
+
+            var response = await _httpClient.PostAsJsonAsync("/api/auth/refresh-token", refreshRequest);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                return false;
+            }
+
+            var jsonString = await response.Content.ReadAsStringAsync();
+            var baseResponse = JsonConvert.DeserializeObject<BaseResponseModel>(jsonString);
+
+            if (baseResponse == null || !baseResponse.Success)
+            {
+                return false;
+            }
+
+            // Extraer los datos de la respuesta
+            var dataJson = JsonConvert.SerializeObject(baseResponse.Data);
+            var refreshResponse = JsonConvert.DeserializeObject<dynamic>(dataJson);
+
+            if (refreshResponse == null)
+            {
+                return false;
+            }
+
+            // Actualizar la sesión con los nuevos tokens
+            var sessionResult = await _localStorage.GetAsync<LoginResponseModel>("sessionState");
+            if (!sessionResult.Success)
+            {
+                return false;
+            }
+
+            var session = sessionResult.Value;
+            session.Token = refreshResponse.token;
+            session.RefreshToken = refreshResponse.refreshToken;
+            session.TokenExpired = refreshResponse.tokenExpired;
+
+            await _localStorage.SetAsync("sessionState", session);
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error refreshing token");
+            return false;
+        }
     }
+
 
     public async Task<T> GetFromJsonAsync<T>(string path)
     {
         await SetAuthorizationHeader();
-        var result = await httpClient.GetFromJsonAsync<T>(path);
+        var result = await _httpClient.GetFromJsonAsync<T>(path);
         return result ?? throw new InvalidOperationException("Received null response from the server.");
     }
+
     public async Task<T?> PatchAsync<T>(string requestUri, object? content = null)
     {
         var jsonContent = content != null ? JsonContent.Create(content) : null;
-        var response = await httpClient.PatchAsync(requestUri, jsonContent);
+        var response = await _httpClient.PatchAsync(requestUri, jsonContent);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -76,17 +206,21 @@ public class ApiClient(HttpClient httpClient,
     /// <typeparam name="T2">Tipo del modelo a enviar</typeparam>
     public async Task<T1> PostAsync<T1, T2>(string path, T2 postModel)
     {
-        await SetAuthorizationHeader();
-        try
+        // Caso especial para el login
+        // No establecemos cabecera de autorización para login y operaciones relacionadas con la contraseña
+        if (!path.Contains("/api/auth/login") &&
+            !path.Contains("/api/auth/forgot-password") &&
+            !path.Contains("/api/auth/reset-password") &&
+            !path.Contains("/api/auth/validate-reset-token"))
         {
-            // Realizamos la petición POST
-            var response = await httpClient.PostAsJsonAsync(path, postModel);
+            await SetAuthorizationHeader();
+        }
 
-            // Caso especial para el login
-            if (path.Contains("/api/auth/login"))
-            {
-                return (T1)(object)await ProcessLoginResponse(response);
-            }
+        try
+        {                
+
+            // Realizamos la petición POST
+            var response = await _httpClient.PostAsJsonAsync(path, postModel);
 
             if (response != null && response.IsSuccessStatusCode)
             {
@@ -160,7 +294,7 @@ public class ApiClient(HttpClient httpClient,
             }
 
             var jsonString = await response.Content.ReadAsStringAsync();
-            Console.WriteLine($"Raw response from login: {jsonString}"); // Para debugging
+            _logger.LogDebug($"Raw response from login: {jsonString}");
 
             var baseResponse = JsonConvert.DeserializeObject<BaseResponseModel>(jsonString);
 
@@ -195,12 +329,12 @@ public class ApiClient(HttpClient httpClient,
         }
         catch (JsonSerializationException ex)
         {
-            Console.WriteLine($"Error de deserialización: {ex.Message}");
+            _logger.LogError(ex, "Error de deserialización");
             throw new ApplicationException("Error al procesar la respuesta del servidor", ex);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error general en ProcessLoginResponse: {ex.Message}");
+            _logger.LogError(ex, "Error general en ProcessLoginResponse");
             throw new ApplicationException("Error en el proceso de login", ex);
         }
     }
@@ -208,7 +342,7 @@ public class ApiClient(HttpClient httpClient,
     public async Task<T1> PutAsync<T1, T2>(string path, T2 postModel)
     {
         await SetAuthorizationHeader();
-        var response = await httpClient.PutAsJsonAsync(path, postModel);
+        var response = await _httpClient.PutAsJsonAsync(path, postModel);
         if (response != null && response.IsSuccessStatusCode)
         {
             return JsonConvert.DeserializeObject<T1>(await response.Content.ReadAsStringAsync()!)!;
@@ -219,7 +353,7 @@ public class ApiClient(HttpClient httpClient,
     public async Task<T> DeleteAsync<T>(string path)
     {
         await SetAuthorizationHeader();
-        var result = await httpClient.DeleteFromJsonAsync<T>(path);
+        var result = await _httpClient.DeleteFromJsonAsync<T>(path);
         return result ?? throw new InvalidOperationException("Received null response from the server.");
     }
 }

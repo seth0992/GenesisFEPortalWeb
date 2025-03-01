@@ -58,40 +58,40 @@ namespace GenesisFEPortalWeb.ApiService.Controllers
             });
         }
 
-        [HttpPost("refresh-token")]
-        public async Task<ActionResult<BaseResponseModel>> RefreshToken([FromBody] RefreshTokenRequest request)
-        {
-            try
-            {
-                var (token, refreshToken) = await _authService.RefreshTokenAsync(
-                    request.Token,
-                    request.RefreshToken);
+        //[HttpPost("refresh-token")]
+        //public async Task<ActionResult<BaseResponseModel>> RefreshToken([FromBody] RefreshTokenRequest request)
+        //{
+        //    try
+        //    {
+        //        var (token, refreshToken) = await _authService.RefreshTokenAsync(
+        //            request.Token,
+        //            request.RefreshToken);
 
-                if (token == null)
-                {
-                    return Ok(new BaseResponseModel
-                    {
-                        Success = false,
-                        ErrorMessage = "Token inválido o expirado"
-                    });
-                }
+        //        if (token == null)
+        //        {
+        //            return Ok(new BaseResponseModel
+        //            {
+        //                Success = false,
+        //                ErrorMessage = "Token inválido o expirado"
+        //            });
+        //        }
 
-                return Ok(new BaseResponseModel
-                {
-                    Success = true,
-                    Data = new { token, refreshToken }
-                });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error en refresh token");
-                return Ok(new BaseResponseModel
-                {
-                    Success = false,
-                    ErrorMessage = "Error al procesar la solicitud"
-                });
-            }
-        }
+        //        return Ok(new BaseResponseModel
+        //        {
+        //            Success = true,
+        //            Data = new { token, refreshToken }
+        //        });
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        _logger.LogError(ex, "Error en refresh token");
+        //        return Ok(new BaseResponseModel
+        //        {
+        //            Success = false,
+        //            ErrorMessage = "Error al procesar la solicitud"
+        //        });
+        //    }
+        //}
 
         [HttpPost("revoke")]
         [Authorize]
@@ -119,6 +119,115 @@ namespace GenesisFEPortalWeb.ApiService.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error en revoke token");
+                return Ok(new BaseResponseModel
+                {
+                    Success = false,
+                    ErrorMessage = "Error al procesar la solicitud"
+                });
+            }
+        }
+
+        [HttpPost("refresh-token")]
+        public async Task<ActionResult<BaseResponseModel>> RefreshToken([FromBody] RefreshTokenRequest request)
+        {
+            try
+            {
+                var (token, refreshToken) = await _authService.RefreshTokenAsync(
+                    request.Token,
+                    request.RefreshToken);
+
+                if (token == null)
+                {
+                    return Ok(new BaseResponseModel
+                    {
+                        Success = false,
+                        ErrorMessage = "Token inválido o expirado"
+                    });
+                }
+
+                return Ok(new BaseResponseModel
+                {
+                    Success = true,
+                    Data = new { token, refreshToken, tokenExpired = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeSeconds() }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error en refresh token");
+                return Ok(new BaseResponseModel
+                {
+                    Success = false,
+                    ErrorMessage = "Error al procesar la solicitud"
+                });
+            }
+        }
+
+        [HttpPost("forgot-password")]
+        public async Task<ActionResult<BaseResponseModel>> ForgotPassword([FromBody] ForgotPasswordDto model)
+        {
+            try
+            {
+                var result = await _authService.ForgotPasswordAsync(model.Email);
+
+                // Siempre retornamos éxito por seguridad, incluso si el email no existe
+                return Ok(new BaseResponseModel
+                {
+                    Success = true,
+                    Data = "Si el correo existe en nuestra base de datos, recibirás un email con instrucciones para restablecer tu contraseña."
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error en solicitud de restablecimiento de contraseña");
+                return Ok(new BaseResponseModel
+                {
+                    Success = false,
+                    ErrorMessage = "Error al procesar la solicitud"
+                });
+            }
+        }
+
+        [HttpPost("validate-reset-token")]
+        public async Task<ActionResult<BaseResponseModel>> ValidateResetToken([FromBody] ResetPasswordDto model)
+        {
+            try
+            {
+                var isValid = await _authService.ValidatePasswordResetTokenAsync(model.Email, model.Token);
+
+                return Ok(new BaseResponseModel
+                {
+                    Success = isValid,
+                    ErrorMessage = isValid ? null : "El token es inválido o ha expirado"
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error validando token de restablecimiento");
+                return Ok(new BaseResponseModel
+                {
+                    Success = false,
+                    ErrorMessage = "Error al procesar la solicitud"
+                });
+            }
+        }
+
+        [HttpPost("reset-password")]
+        public async Task<ActionResult<BaseResponseModel>> ResetPassword([FromBody] ResetPasswordDto model)
+        {
+            try
+            {
+                var result = await _authService.ResetPasswordAsync(model);
+
+                return Ok(new BaseResponseModel
+                {
+                    Success = result,
+                    ErrorMessage = result ? null : "No se pudo restablecer la contraseña",
+                    Data = result ? "Contraseña restablecida correctamente" : null
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error restableciendo contraseña");
                 return Ok(new BaseResponseModel
                 {
                     Success = false,

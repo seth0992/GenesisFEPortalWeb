@@ -36,6 +36,7 @@ namespace GenesisFEPortalWeb.Database.Data
         public DbSet<RoleModel> Roles { get; set; }
         public DbSet<RefreshTokenModel> RefreshTokens { get; set; }
         public DbSet<SecretModel> Secrets { get; set; }
+        public DbSet<PasswordResetTokenModel> PasswordResetTokens { get; set; }
 
         // Catalog
         public DbSet<RegionModel> Regions { get; set; }

@@ -126,6 +126,7 @@ CREATE TABLE Security.RefreshTokens (
     Token NVARCHAR(MAX) NOT NULL,
     ExpiryDate DATETIME NOT NULL,
     CreatedAt DATETIME DEFAULT GETDATE(),
+	UpdatedAt DATETIME,
     CreatedByIp NVARCHAR(50),
     RevokedAt DATETIME,
     RevokedByIp NVARCHAR(50),
@@ -133,6 +134,7 @@ CREATE TABLE Security.RefreshTokens (
     IsActive BIT DEFAULT 1,
     FOREIGN KEY (UserId) REFERENCES Security.Users(ID)
 );
+
 
 CREATE TABLE Security.Secrets (
     ID BIGINT IDENTITY(1,1) PRIMARY KEY,
@@ -147,6 +149,21 @@ CREATE TABLE Security.Secrets (
     CONSTRAINT UQ_Secrets_TenantKey UNIQUE (TenantId, [Key])
 );
 
+
+CREATE TABLE Security.PasswordResetTokens (
+    ID BIGINT IDENTITY(1,1) PRIMARY KEY,
+    UserId BIGINT NOT NULL,
+    Token NVARCHAR(100) NOT NULL,
+    ExpiryDate DATETIME NOT NULL,
+    IsUsed BIT DEFAULT 0,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    UpdatedAt DATETIME,
+    IsActive BIT DEFAULT 1,
+    FOREIGN KEY (UserId) REFERENCES Security.Users(ID)
+);
+
+CREATE INDEX IX_PasswordResetTokens_Token ON Security.PasswordResetTokens(Token);
+CREATE INDEX IX_PasswordResetTokens_UserId ON Security.PasswordResetTokens(UserId);
 /*************************************
 * TABLAS DE CATÁLOGOS               *
 *************************************/

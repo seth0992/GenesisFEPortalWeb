@@ -10,11 +10,17 @@ namespace GenesisFEPortalWeb.Web.Authentication
     public class CustomAuthStateProvider : AuthenticationStateProvider
     {
         private readonly ProtectedLocalStorage _localStorage;
-        private NavigationManager _navigationManager { get; set; } = default!;
-        public CustomAuthStateProvider(ProtectedLocalStorage localStorage, NavigationManager navigationManager)
+        private readonly NavigationManager _navigationManager;
+        private readonly ILogger<CustomAuthStateProvider> _logger;
+
+        public CustomAuthStateProvider(
+            ProtectedLocalStorage localStorage,
+            NavigationManager navigationManager,
+            ILogger<CustomAuthStateProvider> logger)
         {
             _localStorage = localStorage;
             _navigationManager = navigationManager;
+            _logger = logger;
         }
 
         public override async Task<AuthenticationState> GetAuthenticationStateAsync()
@@ -31,6 +37,7 @@ namespace GenesisFEPortalWeb.Web.Authentication
                 // Verificar expiración del token
                 if (sessionModel.Value.TokenExpired < DateTimeOffset.UtcNow.ToUnixTimeSeconds())
                 {
+                    _logger.LogInformation("Token expirado, redirigiendo a login");
                     await _localStorage.DeleteAsync("sessionState");
                     _navigationManager.NavigateTo("/login", true);
                     return new AuthenticationState(new ClaimsPrincipal(new ClaimsIdentity()));
@@ -39,8 +46,9 @@ namespace GenesisFEPortalWeb.Web.Authentication
                 var identity = GetClaimsIdentity(sessionModel.Value.Token);
                 return new AuthenticationState(new ClaimsPrincipal(identity));
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.LogError(ex, "Error en GetAuthenticationStateAsync");
                 return new AuthenticationState(new ClaimsPrincipal(new ClaimsIdentity()));
             }
         }
@@ -63,6 +71,8 @@ namespace GenesisFEPortalWeb.Web.Authentication
 
             var user = new ClaimsPrincipal(identity);
             NotifyAuthenticationStateChanged(Task.FromResult(new AuthenticationState(user)));
+
+            _logger.LogInformation("Usuario autenticado: {Email}", model.User.Email);
         }
 
         private ClaimsIdentity GetClaimsIdentity(string token)
@@ -78,6 +88,71 @@ namespace GenesisFEPortalWeb.Web.Authentication
             var identity = new ClaimsIdentity();
             var user = new ClaimsPrincipal(identity);
             NotifyAuthenticationStateChanged(Task.FromResult(new AuthenticationState(user)));
+
+            _logger.LogInformation("Usuario deslogueado");
         }
     }
+
+    //public override async Task<AuthenticationState> GetAuthenticationStateAsync()
+    //{
+    //    try
+    //    {
+    //        var sessionModel = await _localStorage.GetAsync<LoginResponseModel>("sessionState");
+
+    //        if (!sessionModel.Success || sessionModel.Value == null)
+    //        {
+    //            return new AuthenticationState(new ClaimsPrincipal(new ClaimsIdentity()));
+    //        }
+
+    //        // Verificar expiración del token
+    //        if (sessionModel.Value.TokenExpired < DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+    //        {
+    //            await _localStorage.DeleteAsync("sessionState");
+    //            _navigationManager.NavigateTo("/login", true);
+    //            return new AuthenticationState(new ClaimsPrincipal(new ClaimsIdentity()));
+    //        }
+
+    //        var identity = GetClaimsIdentity(sessionModel.Value.Token);
+    //        return new AuthenticationState(new ClaimsPrincipal(identity));
+    //    }
+    //    catch
+    //    {
+    //        return new AuthenticationState(new ClaimsPrincipal(new ClaimsIdentity()));
+    //    }
+    //}
+
+    //public async Task MarkUserAsAuthenticated(LoginResponseModel model)
+    //{
+    //    await _localStorage.SetAsync("sessionState", model);
+    //    var identity = GetClaimsIdentity(model.Token);
+
+    //    // Agregar claims adicionales si es necesario
+    //    if (!identity.HasClaim(c => c.Type == ClaimTypes.Name))
+    //    {
+    //        identity.AddClaim(new Claim(ClaimTypes.Name,
+    //            $"{model.User.FirstName} {model.User.LastName}"));
+    //    }
+    //    if (!identity.HasClaim(c => c.Type == ClaimTypes.Email))
+    //    {
+    //        identity.AddClaim(new Claim(ClaimTypes.Email, model.User.Email));
+    //    }
+
+    //    var user = new ClaimsPrincipal(identity);
+    //    NotifyAuthenticationStateChanged(Task.FromResult(new AuthenticationState(user)));
+    //}
+
+    //private ClaimsIdentity GetClaimsIdentity(string token)
+    //{
+    //    var handler = new JwtSecurityTokenHandler();
+    //    var jwtToken = handler.ReadJwtToken(token);
+    //    return new ClaimsIdentity(jwtToken.Claims, "jwt");
+    //}
+
+    //public async Task MarkUserAsLoggedOut()
+    //{
+    //    await _localStorage.DeleteAsync("sessionState");
+    //    var identity = new ClaimsIdentity();
+    //    var user = new ClaimsPrincipal(identity);
+    //    NotifyAuthenticationStateChanged(Task.FromResult(new AuthenticationState(user)));
+    //}
 }

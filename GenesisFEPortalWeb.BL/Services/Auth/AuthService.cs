@@ -1,12 +1,15 @@
 ﻿using GenesisFEPortalWeb.BL.Repositories.Auth;
 using GenesisFEPortalWeb.BL.Repositories.Core;
 using GenesisFEPortalWeb.BL.Services.Audit;
+using GenesisFEPortalWeb.BL.Services.Notifications;
 using GenesisFEPortalWeb.Models.Entities.Security;
 using GenesisFEPortalWeb.Models.Entities.Tenant;
 using GenesisFEPortalWeb.Models.Models.Auth;
 using GenesisFEPortalWeb.Models.Models.Exceptions;
 using GenesisFEPortalWeb.Utilities;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using System.Security.Cryptography;
 
 namespace GenesisFEPortalWeb.BL.Services.Auth
 {
@@ -15,6 +18,10 @@ namespace GenesisFEPortalWeb.BL.Services.Auth
         Task<(UserModel? User, string? Token, string? RefreshToken)> LoginAsync(LoginDto model);
         Task<(string? Token, string? RefreshToken)> RefreshTokenAsync(string token, string refreshToken);
         Task<bool> RevokeTokenAsync(string token);
+
+        Task<bool> ForgotPasswordAsync(string email);
+        Task<bool> ValidatePasswordResetTokenAsync(string email, string token);
+        Task<bool> ResetPasswordAsync(ResetPasswordDto model);
     }
 
 
@@ -30,6 +37,8 @@ namespace GenesisFEPortalWeb.BL.Services.Auth
         private readonly ITokenService _tokenService;
         private readonly IAuthAuditLogger _authAuditLogger;
         private readonly ILogger<AuthService> _logger;
+        private readonly IEmailService _emailService;
+        private readonly IConfiguration _configuration;
 
         public AuthService(
             IAuthRepository authRepository,
@@ -37,7 +46,9 @@ namespace GenesisFEPortalWeb.BL.Services.Auth
             ITenantService tenantService,
             IPasswordHasher passwordHasher,
             ITokenService tokenService,
-            IAuthAuditLogger authAuditLogger,
+            IAuthAuditLogger authAuditLogger, 
+            IEmailService emailService,
+             IConfiguration configuration,
             ILogger<AuthService> logger)
         {
             _authRepository = authRepository;
@@ -46,6 +57,8 @@ namespace GenesisFEPortalWeb.BL.Services.Auth
             _passwordHasher = passwordHasher;
             _tokenService = tokenService;
             _authAuditLogger = authAuditLogger;
+            _emailService = emailService;
+            _configuration = configuration;
             _logger = logger;
         }
 
@@ -86,65 +99,6 @@ namespace GenesisFEPortalWeb.BL.Services.Auth
                 throw;
             }
         }
-        //public async Task<(bool Success, string? ErrorMessage)> RegisterUserAsync(RegisterUserDto model)
-        //{
-        //    try
-        //    {
-        //        var currentTenantId = _tenantService.GetCurrentTenantId();
-        //        if (currentTenantId == 0)
-        //        {
-        //            return (false, "No hay un tenant válido en la sesión actual");
-        //        }
-
-        //        var tenant = await _tenantRepository.GetByIdAsync(currentTenantId);
-        //        if (tenant == null || !tenant.IsActive)
-        //        {
-        //            return (false, "El tenant no está activo o no existe");
-        //        }
-
-        //        if (await _authRepository.EmailExistsInTenantAsync(model.Email, currentTenantId))
-        //        {
-        //            return (false, "El email ya está registrado en este tenant");
-        //        }
-
-        //        var defaultRole = await _authRepository.GetRoleByNameAsync("User");
-        //        if (defaultRole == null)
-        //        {
-        //            return (false, "Error al asignar el rol");
-        //        }
-
-        //        var user = new UserModel
-        //        {
-        //            Email = model.Email,
-        //            Username = model.Email,
-        //            FirstName = model.FirstName,
-        //            LastName = model.LastName,
-        //            PasswordHash = _passwordHasher.HashPassword(model.Password),
-        //            RoleId = defaultRole.ID,
-        //            TenantId = currentTenantId,
-        //            EmailConfirmed = true,
-        //            IsActive = true,
-        //            CreatedAt = DateTime.UtcNow,
-        //            LastPasswordChangeDate = DateTime.UtcNow,
-        //            SecurityStamp = Guid.NewGuid().ToString()
-        //        };
-
-        //        await _authRepository.CreateUserAsync(user);
-        //        await _authRepository.SaveChangesAsync();
-
-        //        await _authAuditLogger.LogLoginAttempt(
-        //            user.Email,
-        //            true,
-        //            $"Usuario registrado en tenant {tenant.Name}");
-
-        //        return (true, null);
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        _logger.LogError(ex, "Error registrando usuario {Email}", model.Email);
-        //        return (false, "Error interno del servidor");
-        //    }
-        //}
 
         public async Task<(string? Token, string? RefreshToken)> RefreshTokenAsync(string token, string refreshToken)
         {
@@ -182,6 +136,151 @@ namespace GenesisFEPortalWeb.BL.Services.Auth
             await _authRepository.UpdateUserLockoutAsync(userId, null);
             await _authRepository.UpdateUserLastLoginAsync(userId, DateTime.UtcNow);
             await _authRepository.UpdateUserSecurityStampAsync(userId, Guid.NewGuid().ToString());
+        }
+
+        //public async Task<bool> ForgotPasswordAsync(string email)
+        //{
+        //    try
+        //    {
+        //        var user = await _authRepository.GetUserByEmailAsync(email);
+        //        if (user == null || !user.IsActive || !user.Tenant.IsActive)
+        //        {
+        //            // No indicamos si el usuario existe o no por seguridad
+        //            _logger.LogWarning("Intento de recuperación de contraseña para correo inexistente: {Email}", email);
+        //            return true;
+        //        }
+
+        //        // Generar token único para restablecimiento
+        //        var token = GenerateSecureToken();
+        //        var expiryDate = DateTime.UtcNow.AddHours(24); // El token expira en 24 horas
+
+        //        // Guardar el token en la base de datos
+        //        await _authRepository.GeneratePasswordResetTokenAsync(user.ID, token, expiryDate);
+
+        //        // Aquí deberías enviar un correo con el enlace de restablecimiento
+        //        // Por ahora, solo registramos que se ha generado el token
+        //        _logger.LogInformation("Token de restablecimiento generado para {Email}: {Token}", email, token);
+        //        await _authAuditLogger.LogLoginAttempt(
+        //            user.Email,
+        //            true,
+        //            $"Token de restablecimiento de contraseña generado");
+
+        //        return true;
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        _logger.LogError(ex, "Error en proceso de olvido de contraseña para {Email}", email);
+        //        return false;
+        //    }
+        //}
+
+        public async Task<bool> ForgotPasswordAsync(string email)
+        {
+            try
+            {
+                var user = await _authRepository.GetUserByEmailAsync(email);
+                if (user == null || !user.IsActive || !user.Tenant.IsActive)
+                {
+                    // No indicamos si el usuario existe o no por seguridad
+                    _logger.LogWarning("Intento de recuperación de contraseña para correo inexistente: {Email}", email);
+                    return true;
+                }
+
+                // Generar token único para restablecimiento
+                var token = GenerateSecureToken();
+                var expiryDate = DateTime.UtcNow.AddHours(24); // El token expira en 24 horas
+
+                // Guardar el token en la base de datos
+                await _authRepository.GeneratePasswordResetTokenAsync(user.ID, token, expiryDate);
+
+                // Generar URL de restablecimiento
+                var baseUrl = _configuration["ApplicationUrl"];
+                if (string.IsNullOrEmpty(baseUrl))
+                {
+                    baseUrl = "https://localhost:7214"; // URL por defecto para desarrollo
+                }
+
+                var resetLink = $"{baseUrl}/reset-password?token={token}&email={Uri.EscapeDataString(email)}";
+
+                // Enviar correo con enlace de restablecimiento
+                await _emailService.SendPasswordResetEmailAsync(email, resetLink);
+
+                await _authAuditLogger.LogLoginAttempt(
+                    user.Email,
+                    true,
+                    $"Token de restablecimiento de contraseña generado");
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error en proceso de olvido de contraseña para {Email}", email);
+                return false;
+            }
+        }
+
+        public async Task<bool> ValidatePasswordResetTokenAsync(string email, string token)
+        {
+            try
+            {
+                return await _authRepository.ValidatePasswordResetTokenAsync(email, token);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error validando token de restablecimiento para {Email}", email);
+                return false;
+            }
+        }
+
+        public async Task<bool> ResetPasswordAsync(ResetPasswordDto model)
+        {
+            try
+            {
+                // Validar el token
+                if (!await ValidatePasswordResetTokenAsync(model.Email, model.Token))
+                {
+                    return false;
+                }
+
+                // Obtener el usuario
+                var user = await _authRepository.GetUserByPasswordResetTokenAsync(model.Token);
+                if (user == null)
+                {
+                    return false;
+                }
+
+                // Cambiar la contraseña
+                var newPasswordHash = _passwordHasher.HashPassword(model.Password);
+                await _authRepository.UpdateUserPasswordAsync(user.ID, newPasswordHash);
+
+                // Invalidar el token
+                await _authRepository.InvalidatePasswordResetTokenAsync(user.ID);
+
+                // Registrar la acción
+                await _authAuditLogger.LogLoginAttempt(
+                    user.Email,
+                    true,
+                    "Contraseña restablecida correctamente");
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error restableciendo contraseña");
+                return false;
+            }
+        }
+
+        private string GenerateSecureToken()
+        {
+            var randomNumber = new byte[32];
+            using var rng = RandomNumberGenerator.Create();
+            rng.GetBytes(randomNumber);
+            return Convert.ToBase64String(randomNumber)
+                         .Replace("+", "-")
+                         .Replace("/", "_")
+                         .Replace("=", "")
+                         .Substring(0, 20);
         }
 
 

@@ -48,20 +48,30 @@ namespace GenesisFEPortalWeb.BL.Services.Auth
         /// <param name="token">El token a validar</param>
         /// <returns>El ClaimsPrincipal si el token es válido, null en caso contrario</returns>
         Task<ClaimsPrincipal?> ValidateTokenAsync(string token);
+
+        /// <summary>
+        /// Extrae el ID de usuario y el ID de tenant de un token JWT.
+        /// </summary>
+        /// <param name="token">El token a analizar</param>
+        /// <returns>Tupla con userId y tenantId, o null si no se pueden extraer</returns>
+        (long? UserId, long? TenantId)? ExtractIdsFromToken(string token);
     }
 
     public class TokenService : ITokenService
     {
         private readonly ISecretRepository _secretRepository;
+        private readonly IAuthRepository _authRepository;
         private readonly IConfiguration _configuration;
         private readonly ILogger<TokenService> _logger;
 
         public TokenService(
             ISecretRepository secretRepository,
+            IAuthRepository authRepository,
             IConfiguration configuration,
             ILogger<TokenService> logger)
         {
             _secretRepository = secretRepository;
+            _authRepository = authRepository;
             _configuration = configuration;
             _logger = logger;
         }
@@ -87,35 +97,55 @@ namespace GenesisFEPortalWeb.BL.Services.Auth
                     throw new InvalidOperationException("No se encontró un secreto JWT válido");
                 }
 
+                // Obtener la duración del token en minutos desde la configuración
+                if (!int.TryParse(_configuration["JWT:TokenExpirationMinutes"], out int expirationMinutes))
+                {
+                    expirationMinutes = 60; // Valor predeterminado de 60 minutos
+                }
+
                 var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret));
                 var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
                 var claims = new List<Claim>
-            {
-                new(ClaimTypes.NameIdentifier, user.ID.ToString()),
-                new(ClaimTypes.Name, $"{user.FirstName} {user.LastName}"),
-                new(ClaimTypes.Email, user.Email),
-                new("TenantId", user.TenantId.ToString()),
-                new("TenantName", user.Tenant.Name),
-                new(ClaimTypes.Role, user.Role.Name)
-            };
+                {
+                    new(ClaimTypes.NameIdentifier, user.ID.ToString()),
+                    new(ClaimTypes.Name, $"{user.FirstName} {user.LastName}"),
+                    new(ClaimTypes.Email, user.Email),
+                    new("TenantId", user.TenantId.ToString()),
+                    new("TenantName", user.Tenant.Name),
+                    new(ClaimTypes.Role, user.Role.Name),
+                    new("SecurityStamp", user.SecurityStamp ?? Guid.NewGuid().ToString())
+                };
 
                 var token = new JwtSecurityToken(
                     issuer: _configuration["JWT:ValidIssuer"],
                     audience: _configuration["JWT:ValidAudience"],
                     claims: claims,
-                    expires: DateTime.UtcNow.AddHours(1),
+                    expires: DateTime.UtcNow.AddMinutes(expirationMinutes),
                     signingCredentials: credentials
                 );
 
                 var tokenHandler = new JwtSecurityTokenHandler();
+                var tokenString = tokenHandler.WriteToken(token);
                 var refreshToken = GenerateRefreshTokenString();
+
+                // Guardar el refresh token en la base de datos
+                var refreshTokenModel = new RefreshTokenModel
+                {
+                    UserId = user.ID,
+                    Token = refreshToken,
+                    ExpiryDate = DateTime.UtcNow.AddDays(7), // 7 días de duración para el refresh token
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                await _authRepository.CreateRefreshTokenAsync(refreshTokenModel);
+                await _authRepository.SaveChangesAsync();
 
                 _logger.LogInformation(
                     "Token generado exitosamente para usuario {UserId} del tenant {TenantId}",
                     user.ID, user.TenantId);
 
-                return (tokenHandler.WriteToken(token), refreshToken);
+                return (tokenString, refreshToken);
             }
             catch (Exception ex)
             {
@@ -130,49 +160,56 @@ namespace GenesisFEPortalWeb.BL.Services.Auth
         {
             try
             {
-                var principal = await ValidateTokenAsync(token);
-                if (principal == null) return null;
-
-                // Obtener el TenantId del token actual
-                var tenantIdClaim = principal.Claims.FirstOrDefault(c => c.Type == "TenantId");
-                if (tenantIdClaim == null || !long.TryParse(tenantIdClaim.Value, out var tenantId))
+                // Extraer el ID de usuario y tenant del token
+                var ids = ExtractIdsFromToken(token);
+                if (!ids.HasValue || !ids.Value.UserId.HasValue || !ids.Value.TenantId.HasValue)
                 {
-                    _logger.LogError("No se encontró TenantId en el token");
+                    _logger.LogError("No se pueden extraer IDs del token");
                     return null;
                 }
 
-                // Regenerar token con el mismo tenant
-                var claims = principal.Claims.ToList();
+                var userId = ids.Value.UserId.Value;
+                var tenantId = ids.Value.TenantId.Value;
 
-                // Obtener el secreto específico del tenant
-                var jwtSecret = await _secretRepository.GetSecretValueAsync("JWT_SECRET", tenantId)
-                    ?? _configuration["JWT:Secret"];
-
-                if (string.IsNullOrEmpty(jwtSecret))
+                // Verificar si el refresh token existe y es válido
+                var storedRefreshToken = await _authRepository.GetRefreshTokenAsync(userId, refreshToken);
+                if (storedRefreshToken == null)
                 {
-                    _logger.LogError("No se encontró secreto JWT válido para tenant {TenantId}", tenantId);
+                    _logger.LogWarning("Refresh token no encontrado: {RefreshToken}", refreshToken);
                     return null;
                 }
 
-                var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret));
-                var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+                // Verificar si el refresh token ha expirado o ha sido revocado
+                if (storedRefreshToken.ExpiryDate < DateTime.UtcNow || storedRefreshToken.RevokedAt != null)
+                {
+                    _logger.LogWarning("Refresh token expirado o revocado: {RefreshToken}", refreshToken);
+                    return null;
+                }
 
-                var newToken = new JwtSecurityToken(
-                    issuer: _configuration["JWT:ValidIssuer"],
-                    audience: _configuration["JWT:ValidAudience"],
-                    claims: claims,
-                    expires: DateTime.UtcNow.AddHours(1),
-                    signingCredentials: credentials
-                );
+                // Obtener el usuario
+                var user = await _authRepository.GetUserByIdAsync(userId);
+                if (user == null)
+                {
+                    _logger.LogWarning("Usuario no encontrado: {UserId}", userId);
+                    return null;
+                }
 
-                var tokenHandler = new JwtSecurityTokenHandler();
-                var newRefreshToken = GenerateRefreshTokenString();
+                // Marcar el refresh token anterior como usado
+                storedRefreshToken.RevokedAt = DateTime.UtcNow;
+                await _authRepository.UpdateRefreshTokenAsync(storedRefreshToken);
 
-                return (tokenHandler.WriteToken(newToken), newRefreshToken);
+                // Generar nuevos tokens
+                var (newToken, newRefreshToken) = await GenerateTokensAsync(user);
+
+                _logger.LogInformation(
+                    "Token refrescado exitosamente para usuario {UserId} del tenant {TenantId}",
+                    userId, tenantId);
+
+                return (newToken, newRefreshToken);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error refreshing token");
+                _logger.LogError(ex, "Error refrescando token");
                 return null;
             }
         }
@@ -181,12 +218,24 @@ namespace GenesisFEPortalWeb.BL.Services.Auth
         {
             try
             {
-                var principal = await ValidateTokenAsync(token);
-                return principal != null;
+                var ids = ExtractIdsFromToken(token);
+                if (!ids.HasValue || !ids.Value.UserId.HasValue)
+                {
+                    _logger.LogError("No se puede extraer el ID de usuario del token");
+                    return false;
+                }
+
+                var userId = ids.Value.UserId.Value;
+
+                // Revocar todos los refresh tokens activos del usuario
+                await _authRepository.RevokeAllActiveRefreshTokensAsync(userId);
+
+                _logger.LogInformation("Tokens revocados para usuario {UserId}", userId);
+                return true;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error revoking token");
+                _logger.LogError(ex, "Error revocando token");
                 return false;
             }
         }
@@ -242,6 +291,35 @@ namespace GenesisFEPortalWeb.BL.Services.Auth
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error procesando token");
+                return null;
+            }
+        }
+
+        public (long? UserId, long? TenantId)? ExtractIdsFromToken(string token)
+        {
+            try
+            {
+                var handler = new JwtSecurityTokenHandler();
+                var jwtToken = handler.ReadJwtToken(token);
+
+                var userIdClaim = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier);
+                var tenantIdClaim = jwtToken.Claims.FirstOrDefault(c => c.Type == "TenantId");
+
+                if (userIdClaim == null || tenantIdClaim == null)
+                {
+                    return null;
+                }
+
+                if (!long.TryParse(userIdClaim.Value, out var userId) ||
+                    !long.TryParse(tenantIdClaim.Value, out var tenantId))
+                {
+                    return null;
+                }
+
+                return (userId, tenantId);
+            }
+            catch
+            {
                 return null;
             }
         }
